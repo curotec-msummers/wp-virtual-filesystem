@@ -1,0 +1,75 @@
+.wpvfs-plugin-list {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid #ddd;
+    padding: 10px;
+    margin: 10px 0;
+}
+
+.wpvfs-plugin-list label {
+    display: block;
+    margin-bottom: 8px;
+    padding: 5px;
+}
+
+.wpvfs-plugin-list label:hover {
+    background-color: #f0f0f1;
+}
+
+.wpvfs-file-browser {
+    margin-top: 30px;
+    padding: 20px;
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    box-shadow: 0 1px 1px rgba(0,0,0,.04);
+}
+
+.wpvfs-file-list {
+    margin-top: 15px;
+}
+
+.wpvfs-file-item {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border-bottom: 1px solid #f0f0f1;
+}
+
+.wpvfs-file-item:hover {
+    background-color: #f0f0f1;
+}
+
+.wpvfs-file-name {
+    flex-grow: 1;
+}
+
+.wpvfs-file-size {
+    margin: 0 15px;
+    color: #666;
+}
+
+.wpvfs-file-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.wpvfs-file-actions button {
+    padding: 4px 8px;
+    cursor: pointer;
+}
+
+.wpvfs-status-indicator {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 5px;
+}
+
+.wpvfs-status-active {
+    background-color: #46b450;
+}
+
+.wpvfs-status-inactive {
+    background-color: #dc3232;
+}
