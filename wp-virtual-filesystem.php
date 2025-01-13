@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WordPress Virtual Filesystem
  * Plugin URI: https://curotec.com
- * Description: A WordPress plugin that implements a plugin-specific virtual filesystem layer, storing files in MySQL database instead of the physical filesystem.
+ * Description: A WordPress plugin that implements a virtual filesystem layer, storing files in MySQL database.
  * Version: 1.0.0
  * Author: Matthew Summers
  * Author URI: https://curotec.com
@@ -11,13 +11,12 @@
  * License: GPL v2 or later
  * License URI: http://www.gnu.org/licenses/gpl-2.0.txt
  * Text Domain: wp-virtual-filesystem
- * Domain Path: /languages
- *
- * @package WPVirtualFilesystem
  */
 
+namespace WPVirtualFilesystem;
+
 if (!defined('ABSPATH')) {
-    exit; // Exit if accessed directly
+    exit;
 }
 
 // Plugin version
@@ -27,33 +26,12 @@ define('WPVFS_PLUGIN_PATH', plugin_dir_path(__FILE__));
 // Plugin root URL
 define('WPVFS_PLUGIN_URL', plugin_dir_url(__FILE__));
 
-// Autoloader for plugin classes
-spl_autoload_register(function ($class) {
-    $prefix = 'WPVirtualFilesystem\\';
-    $base_dir = WPVFS_PLUGIN_PATH . 'includes/';
-
-    $len = strlen($prefix);
-    if (strncmp($prefix, $class, $len) !== 0) {
-        return;
-    }
-
-    $relative_class = substr($class, $len);
-    $file = $base_dir . str_replace('\\', '/', $relative_class) . '.php';
-
-    if (file_exists($file)) {
-        require $file;
-    }
-});
-
-// Main plugin class
 class WP_Virtual_Filesystem {
     private static $instance = null;
-    private $stream_wrapper;
-    private $admin;
     private $db;
-    private $plugin_settings;
+    private $admin;
 
-    public static function get_instance() {
+    public static function getInstance() {
         if (null === self::$instance) {
             self::$instance = new self();
         }
@@ -61,200 +39,213 @@ class WP_Virtual_Filesystem {
     }
 
     private function __construct() {
-        $this->init();
-        $this->plugin_settings = get_option('wpvfs_options', [])['plugin_settings'] ?? [];
-    }
-
-    private function init() {
-        // Initialize components on plugins_loaded to ensure WordPress is fully loaded
-        add_action('plugins_loaded', [$this, 'load_components']);
-        
-        // Register activation and deactivation hooks
+        // Register activation/deactivation hooks before anything else
         register_activation_hook(__FILE__, [$this, 'activate']);
         register_deactivation_hook(__FILE__, [$this, 'deactivate']);
+        
+        // Initialize plugin after all plugins are loaded
+        add_action('plugins_loaded', [$this, 'init']);
     }
 
-    public function load_components() {
+    public function init() {
         // Load required files
         require_once WPVFS_PLUGIN_PATH . 'includes/class-database.php';
-        require_once WPVFS_PLUGIN_PATH . 'includes/class-stream-wrapper.php';
         require_once WPVFS_PLUGIN_PATH . 'includes/class-admin.php';
 
         // Initialize components
-        $this->db = new WPVirtualFilesystem\Database();
-        $this->stream_wrapper = new WPVirtualFilesystem\Stream_Wrapper();
-        $this->admin = new WPVirtualFilesystem\Admin();
+        $this->db = new Database();
+        $this->admin = new Admin();
 
-        // Register the stream wrapper
-        stream_wrapper_register('wpvfs', WPVirtualFilesystem\Stream_Wrapper::class);
+        // Add AJAX handlers
+        add_action('wp_ajax_wpvfs_save_settings', [$this, 'handle_save_settings']);
+        add_action('wp_ajax_wpvfs_test_path', [$this, 'handle_test_path']);
 
-        // Only add SCORM hooks if GrassBlade plugin has VFS and SCORM enabled
-        if ($this->is_plugin_vfs_enabled('grassblade')) {
-            // Add basic VFS hooks for the plugin
-            add_filter('plugins_url', [$this, 'modify_plugin_urls'], 10, 3);
-            add_filter('wp_get_attachment_url', [$this, 'modify_attachment_url'], 10, 2);
+        // Add menu
+        add_action('admin_menu', [$this, 'add_admin_menu']);
 
-            // Add SCORM-specific hooks only if SCORM is enabled for this plugin
-            if ($this->is_plugin_scorm_enabled('grassblade')) {
-                add_filter('grassblade_process_upload', [$this, 'intercept_scorm_upload'], 10, 3);
-                add_filter('grassblade_content_url', [$this, 'modify_scorm_content_url'], 10, 2);
-                add_filter('gb_file_exists', [$this, 'check_scorm_file_exists'], 10, 1);
-            }
-        }
-    }
+        // Add settings link
+        add_filter('plugin_action_links_' . plugin_basename(__FILE__), [$this, 'add_settings_link']);
 
-    private function is_plugin_vfs_enabled($plugin_slug) {
-        return !empty($this->plugin_settings[$plugin_slug]['vfs_enabled']);
-    }
-
-    private function is_plugin_scorm_enabled($plugin_slug) {
-        return !empty($this->plugin_settings[$plugin_slug]['vfs_enabled']) && 
-               !empty($this->plugin_settings[$plugin_slug]['scorm_enabled']);
-    }
-
-    public function modify_plugin_urls($url, $path, $plugin) {
-        $plugin_slug = dirname($plugin);
-        if (empty($plugin_slug)) {
-            $plugin_slug = basename($plugin, '.php');
-        }
-
-        if ($this->is_plugin_vfs_enabled($plugin_slug)) {
-            if (strpos($path, 'uploads/' . $plugin_slug) !== false) {
-                return str_replace('wp-content/uploads/' . $plugin_slug, 'wpvfs://' . $plugin_slug, $url);
-            }
-        }
-        return $url;
-    }
-
-    public function modify_attachment_url($url, $attachment_id) {
-        foreach ($this->plugin_settings as $plugin_slug => $settings) {
-            if ($this->is_plugin_vfs_enabled($plugin_slug)) {
-                if (strpos($url, 'uploads/' . $plugin_slug) !== false) {
-                    return str_replace('wp-content/uploads/' . $plugin_slug, 'wpvfs://' . $plugin_slug, $url);
-                }
-            }
-        }
-        return $url;
-    }
-
-    public function intercept_scorm_upload($params, $post, $upload) {
-        // Only intercept if SCORM handling is enabled for this plugin
-        if (!$this->is_plugin_scorm_enabled('grassblade')) {
-            return $params;
-        }
-
-        if (!empty($params['process_status']) || empty($upload['content_path'])) {
-            return $params;
-        }
-
-        $content_path = $upload['content_path'];
-        $content_url = $upload['content_url'];
-
-        // Check if this is a SCORM package
-        if (!file_exists($content_path . DIRECTORY_SEPARATOR . 'imsmanifest.xml')) {
-            return $params;
-        }
-
-        // Store all files in the virtual filesystem
-        $this->store_directory_in_vfs('grassblade', $content_path, $content_url);
-
-        // Modify the content URL to use our virtual filesystem
-        $upload['content_url'] = str_replace('wp-content/uploads/', 'wpvfs://', $content_url);
-        $params['content_url'] = $upload['content_url'];
-
-        return $params;
-    }
-
-    public function modify_scorm_content_url($url, $content_id) {
-        if (strpos($url, 'wp-content/uploads/grassblade/') !== false) {
-            return str_replace('wp-content/uploads/grassblade/', 'wpvfs://grassblade/', $url);
-        }
-        return $url;
-    }
-
-    public function check_scorm_file_exists($file) {
-        if (strpos($file, 'wpvfs://') === 0) {
-            $path = str_replace('wpvfs://', '', $file);
-            list($plugin_slug, $virtual_path) = explode('/', $path, 2);
-            return $this->db->file_exists($plugin_slug, $virtual_path);
-        }
-        return $file;
+        // Register plugin settings
+        add_action('admin_init', [$this, 'register_settings']);
     }
 
     public function activate() {
-        // Initialize database component first
+        // Check WordPress version
+        if (version_compare(get_bloginfo('version'), '5.0', '<')) {
+            deactivate_plugins(plugin_basename(__FILE__));
+            wp_die('This plugin requires WordPress version 5.0 or higher.');
+        }
+
+        // Initialize database component
         require_once WPVFS_PLUGIN_PATH . 'includes/class-database.php';
-        $this->db = new WPVirtualFilesystem\Database();
+        $this->db = new Database();
         
         // Create database tables
         $this->db->create_tables();
         
-        // Set default options
-        $default_options = [
-            'enabled' => true,
-            'intercepted_plugins' => [],
-            'cache_enabled' => true,
-            'cache_ttl' => 3600,
-            'plugin_settings' => [
-                'grassblade' => [
-                    'vfs_enabled' => true,
-                    'scorm_enabled' => true,
-                ],
-            ],
-        ];
+        // Set default options if they don't exist
+        if (!get_option('wpvfs_options')) {
+            $default_options = [
+                'enabled_paths' => [],
+                'cache_enabled' => true,
+                'cache_ttl' => 3600
+            ];
+            add_option('wpvfs_options', $default_options);
+        }
         
-        add_option('wpvfs_options', $default_options);
+        // Reset rewrite rules flag
+        delete_option('wpvfs_rewrite_rules_flushed');
         
         // Flush rewrite rules
         flush_rewrite_rules();
+
+        // Install MU plugin
+        $this->install_mu_plugin();
     }
 
     public function deactivate() {
-        // Unregister stream wrapper
-        stream_wrapper_unregister('wpvfs');
+        // Remove rewrite rules flag
+        delete_option('wpvfs_rewrite_rules_flushed');
         
-        // Flush rewrite rules
+        // Clean up rewrite rules
         flush_rewrite_rules();
+
+        // Optionally remove MU plugin
+        $this->remove_mu_plugin();
+    }
+
+    private function install_mu_plugin() {
+        if (!defined('WPMU_PLUGIN_DIR')) {
+            return;
+        }
+
+        $mu_plugins_dir = WPMU_PLUGIN_DIR;
+        if (!file_exists($mu_plugins_dir)) {
+            if (!wp_mkdir_p($mu_plugins_dir)) {
+                return;
+            }
+        }
+
+        $source = WPVFS_PLUGIN_PATH . 'wp-vfs-mu.php';
+        $target = $mu_plugins_dir . '/wp-vfs-mu.php';
+
+        if (file_exists($source)) {
+            @copy($source, $target);
+        }
+    }
+
+    private function remove_mu_plugin() {
+        if (!defined('WPMU_PLUGIN_DIR')) {
+            return;
+        }
+
+        $mu_plugin_file = WPMU_PLUGIN_DIR . '/wp-vfs-mu.php';
+        if (file_exists($mu_plugin_file)) {
+            @unlink($mu_plugin_file);
+        }
+    }
+
+    public function register_settings() {
+        register_setting('wpvfs_options', 'wpvfs_options', [
+            'type' => 'array',
+            'sanitize_callback' => [$this, 'sanitize_options']
+        ]);
+    }
+
+    public function sanitize_options($options) {
+        if (!is_array($options)) {
+            return [];
+        }
+
+        return [
+            'enabled_paths' => isset($options['enabled_paths']) ? array_map('sanitize_text_field', $options['enabled_paths']) : [],
+            'cache_enabled' => !empty($options['cache_enabled']),
+            'cache_ttl' => isset($options['cache_ttl']) ? absint($options['cache_ttl']) : 3600
+        ];
+    }
+
+    public function add_admin_menu() {
+        add_options_page(
+            __('Virtual Filesystem Settings', 'wp-virtual-filesystem'),
+            __('Virtual Filesystem', 'wp-virtual-filesystem'),
+            'manage_options',
+            'wp-virtual-filesystem',
+            [$this->admin, 'render_settings_page']
+        );
+    }
+
+    public function add_settings_link($links) {
+        $settings_link = '<a href="' . admin_url('options-general.php?page=wp-virtual-filesystem') . '">' . __('Settings', 'wp-virtual-filesystem') . '</a>';
+        array_unshift($links, $settings_link);
+        return $links;
+    }
+
+    public function handle_save_settings() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(__('Unauthorized', 'wp-virtual-filesystem'));
+        }
+
+        if (!check_ajax_referer('wpvfs_settings', 'nonce', false)) {
+            wp_send_json_error(__('Invalid nonce', 'wp-virtual-filesystem'));
+        }
+
+        $settings = [
+            'enabled_paths' => isset($_POST['paths']) ? array_map('sanitize_text_field', $_POST['paths']) : [],
+            'cache_enabled' => !empty($_POST['cache_enabled']),
+            'cache_ttl' => isset($_POST['cache_ttl']) ? absint($_POST['cache_ttl']) : 3600
+        ];
+
+        update_option('wpvfs_options', $settings);
+        update_option('wpvfs_enabled_paths', $settings['enabled_paths']); // For MU plugin
+
+        wp_send_json_success(__('Settings saved', 'wp-virtual-filesystem'));
+    }
+
+    public function handle_test_path() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(__('Unauthorized', 'wp-virtual-filesystem'));
+        }
+
+        if (!check_ajax_referer('wpvfs_settings', 'nonce', false)) {
+            wp_send_json_error(__('Invalid nonce', 'wp-virtual-filesystem'));
+        }
+
+        $path = sanitize_text_field($_POST['path'] ?? '');
+        if (empty($path)) {
+            wp_send_json_error(__('Invalid path', 'wp-virtual-filesystem'));
+        }
+
+        // Validate path format
+        if (preg_match('/[^a-zA-Z0-9\-_\/]/', $path)) {
+            wp_send_json_error(__('Path contains invalid characters', 'wp-virtual-filesystem'));
+        }
+
+        $upload_dir = wp_upload_dir();
+        $full_path = path_join($upload_dir['basedir'], $path);
+
+        // Create directory if it doesn't exist
+        if (!file_exists($full_path)) {
+            if (!wp_mkdir_p($full_path)) {
+                wp_send_json_error(__('Could not create directory', 'wp-virtual-filesystem'));
+            }
+        }
+
+        if (!is_writable($full_path)) {
+            wp_send_json_error(__('Directory is not writable', 'wp-virtual-filesystem'));
+        }
+
+        wp_send_json_success(__('Path is valid and writable', 'wp-virtual-filesystem'));
     }
 
     public function get_db() {
         return $this->db;
     }
-
-    public function get_stream_wrapper() {
-        return $this->stream_wrapper;
-    }
-
-    public function get_admin() {
-        return $this->admin;
-    }
-
-    private function store_directory_in_vfs($plugin_slug, $dir_path, $base_url) {
-        $files = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($dir_path, \RecursiveDirectoryIterator::SKIP_DOTS),
-            \RecursiveIteratorIterator::SELF_FIRST
-        );
-
-        foreach ($files as $file) {
-            if ($file->isFile()) {
-                $relative_path = str_replace($dir_path, '', $file->getPathname());
-                $virtual_path = str_replace('\\', '/', $relative_path);
-                $file_contents = file_get_contents($file->getPathname());
-                
-                $this->db->store_file(
-                    $plugin_slug,
-                    $virtual_path,
-                    $file_contents,
-                    mime_content_type($file->getPathname())
-                );
-            }
-        }
-    }
 }
 
 // Initialize the plugin
 function wpvfs() {
-    return WP_Virtual_Filesystem::get_instance();
+    return WP_Virtual_Filesystem::getInstance();
 }
 
 // Start the plugin

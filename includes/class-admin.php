@@ -11,6 +11,10 @@
 
 namespace WPVirtualFilesystem;
 
+if (!defined('ABSPATH')) {
+    exit;
+}
+
 class Admin {
     private $options;
 
@@ -77,25 +81,157 @@ class Admin {
             wp_die(__('You do not have sufficient permissions to access this page.'));
         }
 
+        $options = get_option('wpvfs_options', [
+            'enabled_paths' => [],
+            'cache_enabled' => true,
+            'cache_ttl' => 3600
+        ]);
         ?>
         <div class="wrap">
             <h1><?php echo esc_html(get_admin_page_title()); ?></h1>
             
-            <form method="post" action="options.php">
-                <?php
-                settings_fields('wpvfs_options');
-                do_settings_sections('wp-virtual-filesystem');
-                submit_button();
-                ?>
+            <form id="wpvfs-settings-form">
+                <?php wp_nonce_field('wpvfs_settings', 'wpvfs_nonce'); ?>
+                
+                <h2>Virtual Filesystem Paths</h2>
+                <p>Specify which upload paths should be handled by the virtual filesystem. Files uploaded to these paths will be stored in the database.</p>
+                
+                <table class="form-table" role="presentation">
+                    <tbody>
+                        <tr>
+                            <th scope="row">Enabled Paths</th>
+                            <td>
+                                <div id="path-container">
+                                    <?php foreach ($options['enabled_paths'] as $path): ?>
+                                    <div class="path-row">
+                                        <input type="text" name="paths[]" value="<?php echo esc_attr($path); ?>" class="regular-text">
+                                        <button type="button" class="button remove-path">Remove</button>
+                                        <button type="button" class="button test-path">Test Path</button>
+                                        <span class="path-status"></span>
+                                    </div>
+                                    <?php endforeach; ?>
+                                </div>
+                                <button type="button" class="button" id="add-path">Add Path</button>
+                                <p class="description">Enter relative paths from the uploads directory (e.g., 'grassblade' or 'scorm/packages')</p>
+                            </td>
+                        </tr>
+                        
+                        <tr>
+                            <th scope="row">Enable Caching</th>
+                            <td>
+                                <label>
+                                    <input type="checkbox" name="cache_enabled" value="1" <?php checked($options['cache_enabled']); ?>>
+                                    Cache virtual files for better performance
+                                </label>
+                            </td>
+                        </tr>
+                        
+                        <tr>
+                            <th scope="row">Cache TTL</th>
+                            <td>
+                                <input type="number" name="cache_ttl" value="<?php echo esc_attr($options['cache_ttl']); ?>" class="small-text">
+                                <p class="description">Time in seconds to cache virtual files (default: 3600)</p>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                
+                <p class="submit">
+                    <button type="submit" class="button button-primary" id="save-settings">Save Changes</button>
+                </p>
             </form>
-
-            <div class="wpvfs-file-browser">
-                <h2><?php _e('File Browser', 'wp-virtual-filesystem'); ?></h2>
-                <div id="wpvfs-file-list">
-                    <!-- File list will be populated via AJAX -->
-                </div>
-            </div>
         </div>
+
+        <script>
+        jQuery(document).ready(function($) {
+            // Add new path row
+            $('#add-path').on('click', function() {
+                var row = $('<div class="path-row">' +
+                    '<input type="text" name="paths[]" class="regular-text">' +
+                    '<button type="button" class="button remove-path">Remove</button>' +
+                    '<button type="button" class="button test-path">Test Path</button>' +
+                    '<span class="path-status"></span>' +
+                    '</div>');
+                $('#path-container').append(row);
+            });
+
+            // Remove path row
+            $(document).on('click', '.remove-path', function() {
+                $(this).closest('.path-row').remove();
+            });
+
+            // Test path
+            $(document).on('click', '.test-path', function() {
+                var row = $(this).closest('.path-row');
+                var path = row.find('input').val();
+                var status = row.find('.path-status');
+
+                status.html('Testing...');
+
+                $.post(ajaxurl, {
+                    action: 'wpvfs_test_path',
+                    path: path,
+                    nonce: $('#wpvfs_nonce').val()
+                })
+                .done(function(response) {
+                    if (response.success) {
+                        status.html('<span style="color: green;">✓ ' + response.data + '</span>');
+                    } else {
+                        status.html('<span style="color: red;">✗ ' + response.data + '</span>');
+                    }
+                })
+                .fail(function() {
+                    status.html('<span style="color: red;">✗ Error testing path</span>');
+                });
+            });
+
+            // Save settings
+            $('#wpvfs-settings-form').on('submit', function(e) {
+                e.preventDefault();
+
+                var form = $(this);
+                var submit = form.find('#save-settings');
+                
+                submit.prop('disabled', true);
+
+                $.post(ajaxurl, {
+                    action: 'wpvfs_save_settings',
+                    nonce: $('#wpvfs_nonce').val(),
+                    paths: form.find('input[name="paths[]"]').map(function() {
+                        return $(this).val();
+                    }).get(),
+                    cache_enabled: form.find('input[name="cache_enabled"]').is(':checked') ? 1 : 0,
+                    cache_ttl: form.find('input[name="cache_ttl"]').val()
+                })
+                .done(function(response) {
+                    if (response.success) {
+                        alert('Settings saved successfully');
+                    } else {
+                        alert('Error saving settings: ' + response.data);
+                    }
+                })
+                .fail(function() {
+                    alert('Error saving settings');
+                })
+                .always(function() {
+                    submit.prop('disabled', false);
+                });
+            });
+        });
+        </script>
+
+        <style>
+        .path-row {
+            margin-bottom: 10px;
+        }
+        .path-row .button {
+            margin-left: 5px;
+        }
+        .path-status {
+            margin-left: 10px;
+            display: inline-block;
+        }
+        </style>
         <?php
     }
 
