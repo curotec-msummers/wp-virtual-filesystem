@@ -182,8 +182,12 @@ class WP_Virtual_Filesystem {
     }
 
     public function activate() {
+        // Initialize database component first
+        require_once WPVFS_PLUGIN_PATH . 'includes/class-database.php';
+        $this->db = new WPVirtualFilesystem\Database();
+        
         // Create database tables
-        $this->get_db()->create_tables();
+        $this->db->create_tables();
         
         // Set default options
         $default_options = [
