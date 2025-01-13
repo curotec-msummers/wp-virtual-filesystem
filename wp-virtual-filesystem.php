@@ -1,3 +1,4 @@
+<?php
 /**
  * Plugin Name: WordPress Virtual Filesystem
  * Plugin URI: https://curotec.com

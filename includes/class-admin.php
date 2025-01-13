@@ -1,3 +1,4 @@
+<?php
 /**
  * Admin interface for WordPress Virtual Filesystem
  *

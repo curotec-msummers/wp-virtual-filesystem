@@ -1,3 +1,4 @@
+<?php
 /**
  * Database operations for WordPress Virtual Filesystem
  *

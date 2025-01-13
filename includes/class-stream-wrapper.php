@@ -1,3 +1,4 @@
+<?php
 /**
  * Stream Wrapper implementation for WordPress Virtual Filesystem
  *
