@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: WordPress Virtual Filesystem MU Plugin
+ * Plugin Name: WordPress Virtual Filesystem
  * Plugin URI: https://curotec.com
- * Description: Must-Use plugin component for WordPress Virtual Filesystem
+ * Description: A WordPress plugin that implements a virtual filesystem layer, storing files in MySQL database.
  * Version: 1.0.0
  * Author: Matthew Summers
  * Author URI: https://curotec.com
@@ -11,13 +11,13 @@
  * License: GPL v2 or later
  */
 
-namespace WPVirtualFilesystem\MU;
+namespace WPVirtualFilesystem\Core;
 
 if (!defined('ABSPATH')) {
     exit;
 }
 
-class FileOperationInterceptor {
+class VirtualFilesystemHandler {
     private static $instance = null;
     private $db;
     private $enabled_paths = [];
@@ -31,7 +31,8 @@ class FileOperationInterceptor {
     }
 
     private function __construct() {
-        add_action('muplugins_loaded', [$this, 'init'], 0);
+        // Initialize plugin after all plugins are loaded
+        add_action('plugins_loaded', [$this, 'init']);
         
         // Add admin functionality
         if (is_admin()) {
@@ -44,21 +45,13 @@ class FileOperationInterceptor {
     }
 
     public function init() {
-        // Only proceed if main plugin is active
-        if (!class_exists('\\WPVirtualFilesystem\\Database')) {
-            return;
-        }
-
         // Load database handler
-        require_once WP_CONTENT_DIR . '/plugins/wp-virtual-filesystem/includes/class-database.php';
+        require_once __DIR__ . '/includes/class-database.php';
         $this->db = new \WPVirtualFilesystem\Database();
         
         // Get enabled paths from options
-        $this->enabled_paths = get_option('wpvfs_enabled_paths', []);
-        if (empty($this->enabled_paths)) {
-            $options = get_option('wpvfs_options', []);
-            $this->enabled_paths = $options['enabled_paths'] ?? [];
-        }
+        $options = get_option('wpvfs_options', []);
+        $this->enabled_paths = $options['enabled_paths'] ?? [];
 
         // Core WordPress upload hooks
         add_filter('upload_dir', [$this, 'modify_upload_dir'], 1);
@@ -84,6 +77,35 @@ class FileOperationInterceptor {
         // Register URL handler
         add_action('init', [$this, 'register_url_handlers']);
         add_action('parse_request', [$this, 'handle_virtual_file_request']);
+
+        // Create tables if needed
+        $this->maybe_create_tables();
+    }
+
+    private function maybe_create_tables() {
+        if (!get_option('wpvfs_db_version')) {
+            $this->db->create_tables();
+            update_option('wpvfs_db_version', '1.0.0');
+        }
+    }
+
+    public function register_settings() {
+        register_setting('wpvfs_options', 'wpvfs_options', [
+            'type' => 'array',
+            'sanitize_callback' => [$this, 'sanitize_options']
+        ]);
+    }
+
+    public function sanitize_options($options) {
+        if (!is_array($options)) {
+            return [];
+        }
+
+        return [
+            'enabled_paths' => isset($options['enabled_paths']) ? array_map('sanitize_text_field', $options['enabled_paths']) : [],
+            'cache_enabled' => !empty($options['cache_enabled']),
+            'cache_ttl' => isset($options['cache_ttl']) ? absint($options['cache_ttl']) : 3600
+        ];
     }
 
     public function enqueue_admin_assets($hook) {
@@ -175,6 +197,61 @@ class FileOperationInterceptor {
             </form>
         </div>
         <?php
+    }
+
+    public function handle_save_settings() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(__('Unauthorized', 'wp-virtual-filesystem'));
+        }
+
+        if (!check_ajax_referer('wpvfs_settings', 'nonce', false)) {
+            wp_send_json_error(__('Invalid nonce', 'wp-virtual-filesystem'));
+        }
+
+        $settings = [
+            'enabled_paths' => isset($_POST['paths']) ? array_map('sanitize_text_field', $_POST['paths']) : [],
+            'cache_enabled' => !empty($_POST['cache_enabled']),
+            'cache_ttl' => isset($_POST['cache_ttl']) ? absint($_POST['cache_ttl']) : 3600
+        ];
+
+        update_option('wpvfs_options', $settings);
+        wp_send_json_success(__('Settings saved', 'wp-virtual-filesystem'));
+    }
+
+    public function handle_test_path() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(__('Unauthorized', 'wp-virtual-filesystem'));
+        }
+
+        if (!check_ajax_referer('wpvfs_settings', 'nonce', false)) {
+            wp_send_json_error(__('Invalid nonce', 'wp-virtual-filesystem'));
+        }
+
+        $path = sanitize_text_field($_POST['path'] ?? '');
+        if (empty($path)) {
+            wp_send_json_error(__('Invalid path', 'wp-virtual-filesystem'));
+        }
+
+        // Validate path format
+        if (preg_match('/[^a-zA-Z0-9\-_\/]/', $path)) {
+            wp_send_json_error(__('Path contains invalid characters', 'wp-virtual-filesystem'));
+        }
+
+        $upload_dir = wp_upload_dir();
+        $full_path = path_join($upload_dir['basedir'], $path);
+
+        // Create directory if it doesn't exist
+        if (!file_exists($full_path)) {
+            if (!wp_mkdir_p($full_path)) {
+                wp_send_json_error(__('Could not create directory', 'wp-virtual-filesystem'));
+            }
+        }
+
+        if (!is_writable($full_path)) {
+            wp_send_json_error(__('Directory is not writable', 'wp-virtual-filesystem'));
+        }
+
+        wp_send_json_success(__('Path is valid and writable', 'wp-virtual-filesystem'));
     }
 
     public function modify_upload_dir($uploads) {
@@ -427,5 +504,5 @@ class FileOperationInterceptor {
     }
 }
 
-// Initialize immediately
-FileOperationInterceptor::getInstance();
+// Initialize the plugin
+VirtualFilesystemHandler::getInstance();
