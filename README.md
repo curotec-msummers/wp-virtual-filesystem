@@ -21,9 +21,17 @@ This plugin was designed to solve the specific problem of plugins that need to w
 
 ## Installation
 
-1. Upload the `wp-virtual-filesystem` directory to the `/wp-content/plugins/` directory
-2. Activate the plugin through the 'Plugins' menu in WordPress
-3. Go to Settings > Virtual Filesystem to configure plugin-specific settings
+1. Create the `mu-plugins` directory in your WordPress installation if it doesn't exist:
+   ```
+   wp-content/mu-plugins/
+   ```
+
+2. Copy the following files to your `mu-plugins` directory:
+   - `wp-vfs-mu.php` → `wp-content/mu-plugins/wp-vfs-mu.php`
+   - `includes/` directory → `wp-content/mu-plugins/includes/`
+   - `assets/` directory → `wp-content/mu-plugins/assets/`
+
+The plugin will be automatically activated as it's installed as a Must-Use plugin.
 
 ## Configuration
 

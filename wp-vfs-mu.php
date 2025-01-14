@@ -32,6 +32,15 @@ class FileOperationInterceptor {
 
     private function __construct() {
         add_action('muplugins_loaded', [$this, 'init'], 0);
+        
+        // Add admin functionality
+        if (is_admin()) {
+            add_action('admin_menu', [$this, 'add_admin_menu']);
+            add_action('admin_init', [$this, 'register_settings']);
+            add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
+            add_action('wp_ajax_wpvfs_save_settings', [$this, 'handle_save_settings']);
+            add_action('wp_ajax_wpvfs_test_path', [$this, 'handle_test_path']);
+        }
     }
 
     public function init() {
@@ -75,6 +84,97 @@ class FileOperationInterceptor {
         // Register URL handler
         add_action('init', [$this, 'register_url_handlers']);
         add_action('parse_request', [$this, 'handle_virtual_file_request']);
+    }
+
+    public function enqueue_admin_assets($hook) {
+        if ('settings_page_wp-virtual-filesystem' !== $hook) {
+            return;
+        }
+
+        wp_enqueue_style('wpvfs-admin', plugins_url('assets/css/admin.css', __FILE__));
+        wp_enqueue_script('wpvfs-admin', plugins_url('assets/js/admin.js', __FILE__), ['jquery'], '1.0.0', true);
+        wp_localize_script('wpvfs-admin', 'wpvfs', [
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('wpvfs_settings')
+        ]);
+    }
+
+    public function add_admin_menu() {
+        add_options_page(
+            __('Virtual Filesystem Settings', 'wp-virtual-filesystem'),
+            __('Virtual Filesystem', 'wp-virtual-filesystem'),
+            'manage_options',
+            'wp-virtual-filesystem',
+            [$this, 'render_settings_page']
+        );
+    }
+
+    public function render_settings_page() {
+        if (!current_user_can('manage_options')) {
+            wp_die(__('You do not have sufficient permissions to access this page.'));
+        }
+
+        $options = get_option('wpvfs_options', [
+            'enabled_paths' => [],
+            'cache_enabled' => true,
+            'cache_ttl' => 3600
+        ]);
+        ?>
+        <div class="wrap">
+            <h1><?php echo esc_html(get_admin_page_title()); ?></h1>
+            
+            <form id="wpvfs-settings-form">
+                <?php wp_nonce_field('wpvfs_settings', 'wpvfs_nonce'); ?>
+                
+                <h2>Virtual Filesystem Paths</h2>
+                <p>Specify which upload paths should be handled by the virtual filesystem. Files uploaded to these paths will be stored in the database.</p>
+                
+                <table class="form-table" role="presentation">
+                    <tbody>
+                        <tr>
+                            <th scope="row">Enabled Paths</th>
+                            <td>
+                                <div id="path-container">
+                                    <?php foreach ($options['enabled_paths'] as $path): ?>
+                                    <div class="path-row">
+                                        <input type="text" name="paths[]" value="<?php echo esc_attr($path); ?>" class="regular-text">
+                                        <button type="button" class="button remove-path">Remove</button>
+                                        <button type="button" class="button test-path">Test Path</button>
+                                        <span class="path-status"></span>
+                                    </div>
+                                    <?php endforeach; ?>
+                                </div>
+                                <button type="button" class="button" id="add-path">Add Path</button>
+                                <p class="description">Enter relative paths from the uploads directory (e.g., 'grassblade' or 'scorm/packages')</p>
+                            </td>
+                        </tr>
+                        
+                        <tr>
+                            <th scope="row">Enable Caching</th>
+                            <td>
+                                <label>
+                                    <input type="checkbox" name="cache_enabled" value="1" <?php checked($options['cache_enabled']); ?>>
+                                    Cache virtual files for better performance
+                                </label>
+                            </td>
+                        </tr>
+                        
+                        <tr>
+                            <th scope="row">Cache TTL</th>
+                            <td>
+                                <input type="number" name="cache_ttl" value="<?php echo esc_attr($options['cache_ttl']); ?>" class="small-text">
+                                <p class="description">Time in seconds to cache virtual files (default: 3600)</p>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                
+                <p class="submit">
+                    <button type="submit" class="button button-primary" id="save-settings">Save Changes</button>
+                </p>
+            </form>
+        </div>
+        <?php
     }
 
     public function modify_upload_dir($uploads) {
